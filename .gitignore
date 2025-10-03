@@ -1,0 +1,4 @@
+logs/
+xiaozhi_latency_dist_*.png
+__pycache__/
+xiaozhi_test.py

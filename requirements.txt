@@ -1,0 +1,21 @@
+# Xiaozhi WebSocket 并发测试工具 - 统一版本依赖
+
+# 核心测试依赖
+websockets>=12.0      # WebSocket客户端
+numpy>=1.21.0         # 音频数据处理
+
+# 音频处理依赖
+wave                  # WAV文件读取（内置）
+opuslib>=3.0.0        # Opus编码（需要libopus）
+
+# 系统监控依赖
+psutil>=5.8.0         # 系统资源监控
+
+# 可视化依赖 (可选)
+matplotlib>=3.5.0     # 图表生成
+
+# Python 版本要求: >= 3.8
+# 推荐使用 conda test 环境
+# 注意：opuslib需要系统安装libopus库
+
+
