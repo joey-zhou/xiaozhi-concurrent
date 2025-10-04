@@ -12,7 +12,7 @@ from src import XiaozhiConcurrentTester
 from src.config import (
     DEFAULT_SERVER_URL,
     DEFAULT_CLIENTS,
-    DEFAULT_CONCURRENCY
+    DEFAULT_ROUNDS
 )
 
 
@@ -27,7 +27,10 @@ def main():
   python run_test.py
   
   # 自定义参数
-  python run_test.py --server ws://localhost:8091/ws/xiaozhi/v1/ --clients 200 --concurrency 40
+  python run_test.py --server ws://localhost:8091/ws/xiaozhi/v1/ --clients 200
+  
+  # 多轮测试（100个客户端，每个执行5轮）
+  python run_test.py --clients 100 --rounds 5
   
   # 使用自定义音频文件
   python run_test.py --audio test_audio.wav --clients 50
@@ -43,13 +46,13 @@ def main():
         "--clients", 
         type=int, 
         default=DEFAULT_CLIENTS,
-        help=f"总客户端数量 (默认: {DEFAULT_CLIENTS})"
+        help=f"并发客户端数量 (默认: {DEFAULT_CLIENTS})"
     )
     parser.add_argument(
-        "--concurrency", 
-        type=int, 
-        default=DEFAULT_CONCURRENCY,
-        help=f"并发数量 (默认: {DEFAULT_CONCURRENCY})"
+        "--rounds",
+        type=int,
+        default=DEFAULT_ROUNDS,
+        help=f"每个客户端执行轮数 (默认: {DEFAULT_ROUNDS})"
     )
     parser.add_argument(
         "--audio", 
@@ -72,11 +75,10 @@ def main():
     # 创建测试器并运行
     tester = XiaozhiConcurrentTester(
         server_url=args.server,
-        concurrency=args.concurrency,
         test_audio_path=args.audio
     )
     
-    tester.run_full_test(args.clients)
+    tester.run_full_test(args.clients, args.rounds)
 
 
 if __name__ == "__main__":

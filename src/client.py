@@ -40,11 +40,7 @@ class XiaozhiTestClient:
         self.detect_sent = False          # 唤醒词发送状态
         self.detect_audio_received = False # 唤醒词音频接收状态
         self.test_completed = False       # 测试完成状态
-        self.listen_started = False
         self.audio_sending = False
-        self.audio_sent = False
-        self.stt_completed = False
-        self.start_received = False
         self.audio_receiving = False
         self.has_failed = False
 
@@ -89,7 +85,6 @@ class XiaozhiTestClient:
         self.server_stt_start_time = 0  # 服务器开始STT处理的时间（用于响应时延计算）
 
         # 测试音频数据
-        self.test_audio_data = self.load_test_audio()
         self.real_audio_data = self.load_real_audio_data()
         
         # 预生成Opus静音帧（避免每次重新生成）
@@ -104,32 +99,28 @@ class XiaozhiTestClient:
         """完成测试"""
         if not self.test_completed:
             self.test_completed = True
+            
+            # 清理所有可能残留的阶段状态
+            # 注意：由于我们无法知道当前处于哪个阶段，所以需要根据状态标志来清理
+            # 这些标志在测试过程中会被设置，如果测试完成时还是True，说明需要清理对应的阶段计数
+            
+            # 注意：connecting 和 hello 阶段通常在测试完成前就已经清理，这里不需要处理
+            # detect 阶段也是在收到响应后就清理了
+            
+            # 检查是否还在 audio_sending 阶段
+            if self.audio_sending:
+                self.progress.update_stage('audio_sending', -1)
+                self.audio_sending = False
+            
+            # 检查是否还在 audio_receiving 阶段
+            if self.audio_receiving:
+                self.progress.update_stage('audio_receiving', -1)
+                self.audio_receiving = False
+            
+            # 检查是否还在 waiting_response 阶段（这个状态没有专门的标志，需要通过其他状态推断）
+            # waiting_response 通常在收到start或音频数据时会清理
+            
             self.progress.increment_completed()
-
-    def load_test_audio(self) -> Optional[bytes]:
-        """加载测试音频文件"""
-        if not self.test_audio_path:
-            try:
-                # 生成1秒的16kHz单声道PCM音频数据
-                sample_rate = 16000
-                duration = 1.0
-                frequency = 440  # A4音符
-                samples = np.linspace(0, duration, int(sample_rate * duration), False)
-                audio_data = np.sin(frequency * 2 * np.pi * samples)
-
-                # 转换为16位PCM
-                audio_data = (audio_data * 32767).astype(np.int16)
-                return audio_data.tobytes()
-            except Exception as e:
-                logger.error(f"生成测试音频失败: {e}")
-                return None
-
-        try:
-            with open(self.test_audio_path, 'rb') as f:
-                return f.read()
-        except Exception as e:
-            logger.error(f"加载测试音频文件失败: {e}")
-            return None
 
     def load_real_audio_data(self) -> Dict[str, bytes]:
         """加载真实测试音频文件"""
@@ -373,9 +364,14 @@ class XiaozhiTestClient:
         
         if audio_text not in self.real_audio_data:
             logger.error(f"客户端 {self.device_id} 未找到音频数据: {audio_text}")
+            # 不需要更新阶段状态，因为还没有进入try块
             return False
         
         try:
+            # 更新阶段状态：进入音频发送阶段
+            self.progress.update_stage('audio_sending', 1)
+            self.audio_sending = True
+            
             pcm_data = self.real_audio_data[audio_text]
             debug_logger.debug(f"🎵 客户端 {self.device_id} PCM数据长度: {len(pcm_data)} 字节")
             opus_frames = self.encode_to_opus_frames(pcm_data)
@@ -419,6 +415,9 @@ class XiaozhiTestClient:
                 else:
                     debug_logger.debug(f"❌ 客户端 {self.device_id} WebSocket连接在发送第 {i+1} 帧时已断开")
                     logger.error(f"客户端 {self.device_id} WebSocket连接已断开")
+                    # 更新阶段状态：退出音频发送阶段（连接断开）
+                    self.progress.update_stage('audio_sending', -1)
+                    self.audio_sending = False
                     return False
             
             # 【关键修改】音频帧发送完成，立即记录结束时间（在发送空帧之前）
@@ -454,6 +453,10 @@ class XiaozhiTestClient:
             self.metrics.record_real_audio_send_time(real_audio_send_duration, True)
             self.metrics.record_audio_traffic_sent(self.device_id, total_sent_bytes, real_audio_send_duration)
             
+            # 更新阶段状态：退出音频发送阶段
+            self.progress.update_stage('audio_sending', -1)
+            self.audio_sending = False
+            
             logger.info(f"客户端 {self.device_id} 真实音频测试完成，音频帧发送耗时: {real_audio_send_duration:.3f}s，发送流量: {total_sent_bytes/1024:.1f}KB (PCM: {pcm_size/1024:.1f}KB)")
             return True
             
@@ -464,6 +467,11 @@ class XiaozhiTestClient:
             else:
                 send_duration = 0
             self.metrics.record_real_audio_send_time(send_duration, False)
+            
+            # 更新阶段状态：退出音频发送阶段（失败情况）
+            self.progress.update_stage('audio_sending', -1)
+            self.audio_sending = False
+            
             return False
 
     async def start_real_audio_test(self):
@@ -550,7 +558,6 @@ class XiaozhiTestClient:
             }
 
             await self.websocket.send(json.dumps(listen_message))
-            self.listen_started = True
 
         except Exception as e:
             logger.error(f"客户端 {self.device_id} 发送listen start失败: {e}")
@@ -558,40 +565,6 @@ class XiaozhiTestClient:
 
         return True
 
-    async def send_audio_data(self):
-        """发送音频数据"""
-        if not self.websocket or not self.test_audio_data:
-            return False
-
-        try:
-            self.progress.update_stage('audio_sending', 1)
-            self.audio_send_start_time = time.time()
-            self.audio_sending = True
-
-            # 发送音频数据
-            await self.websocket.send(self.test_audio_data)
-
-            # 发送listen stop消息
-            stop_message = {
-                "type": "listen",
-                "state": "stop"
-            }
-            await self.websocket.send(json.dumps(stop_message))
-
-            self.audio_send_end_time = time.time()
-            send_duration = self.audio_send_end_time - self.audio_send_start_time
-            self.metrics.record_audio_send_time(send_duration, True)
-            self.audio_sent = True
-            self.progress.update_stage('audio_sending', -1)
-
-        except Exception as e:
-            send_duration = time.time() - self.audio_send_start_time if hasattr(self, 'audio_send_start_time') else 0
-            self.metrics.record_audio_send_time(send_duration, False)
-            self.progress.update_stage('audio_sending', -1)
-            logger.error(f"客户端 {self.device_id} 发送音频失败: {e}")
-            return False
-
-        return True
 
     async def receive_messages(self):
         """接收和处理消息"""
@@ -809,7 +782,6 @@ class XiaozhiTestClient:
                         stt_to_start_duration = self.start_receive_time - self.stt_complete_time
                         self.metrics.record_stt_to_start_time(stt_to_start_duration)
 
-                    self.start_received = True
                     self.audio_receiving = True
                     self.audio_receive_start_time = self.start_receive_time
                     self.last_frame_time = self.audio_receive_start_time
@@ -971,6 +943,58 @@ class XiaozhiTestClient:
                     current_rate = self.total_audio_bytes / duration  # 字节/秒
                     self.metrics.update_current_audio_rate(current_rate)
 
+    def reset_for_next_round(self):
+        """重置客户端状态以进行下一轮测试"""
+        self.session_id = ""
+        self.websocket = None
+        
+        # 重置状态
+        self.connected = False
+        self.hello_sent = False
+        self.hello_received = False
+        self.detect_sent = False
+        self.detect_audio_received = False
+        self.test_completed = False
+        self.audio_sending = False
+        self.audio_receiving = False
+        self.has_failed = False
+        
+        # 重置时间戳
+        self.connection_start_time = 0
+        self.hello_send_time = 0
+        self.hello_receive_time = 0
+        self.detect_send_time = 0
+        self.detect_audio_receive_time = 0
+        self.audio_send_start_time = 0
+        self.audio_send_end_time = 0
+        self.stt_complete_time = 0
+        self.start_receive_time = 0
+        self.audio_receive_start_time = 0
+        
+        # 重置计数器
+        self.last_frame_time = 0
+        self.frame_count = 0
+        self.current_segment_start_time = 0
+        self.segment_frame_count = 0
+        self.segment_intervals = []
+        self.total_segments = 0
+        self.completed_segments = 0
+        self.segment_frame_rates = []
+        self.total_audio_bytes = 0
+        self.audio_start_time = 0
+        
+        # 重置真实音频测试状态
+        self.real_audio_phase = False
+        self.real_audio_sent = False
+        self.real_audio_send_end_time = 0
+        self.expected_stt_text = ""
+        self.server_processing_complete = False
+        self.server_stt_start_time = 0
+        
+        # 更新性能计数器基准时间
+        self.perf_counter_base = time.perf_counter()
+        self.time_base = time.time()
+
     async def run_test(self):
         """运行完整测试流程"""
         try:
@@ -1049,25 +1073,6 @@ class XiaozhiTestClient:
                     self.metrics.record_audio_receive_time(audio_receive_duration, success=False, timeout=True)
                     self.audio_receiving = False
                 self.complete_test()
-
-            # 注释掉原有的音频发送逻辑（暂时不使用）
-            # # 3. 发送listen start消息
-            # await self.send_listen_start()
-            # await asyncio.sleep(0.1)
-            # 
-            # # 4. 发送音频数据
-            # if self.test_audio_data:
-            #     await self.send_audio_data()
-            #
-            # # 5. 等待服务器响应
-            # timeout = 60
-            # start_time = time.time()
-            # while (not self.start_received or self.audio_receiving) and (time.time() - start_time) < timeout:
-            #     await asyncio.sleep(0.1)
-            #
-            # # 记录测试结果
-            # if not self.start_received:
-            #     self.metrics.record_audio_receive_time(0, success=False, timeout=True)
 
             # 取消接收任务
             receive_task.cancel()

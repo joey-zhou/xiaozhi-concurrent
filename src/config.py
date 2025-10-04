@@ -11,6 +11,10 @@ timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 LOG_DIR = os.path.join(os.getcwd(), 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)
 
+# 图片输出目录
+FIGURES_DIR = os.path.join(os.getcwd(), 'figures')
+os.makedirs(FIGURES_DIR, exist_ok=True)
+
 # 检查可选依赖
 try:
     import opuslib
@@ -30,7 +34,7 @@ except ImportError:
 # WebSocket 配置
 DEFAULT_SERVER_URL = "ws://localhost:8091/ws/xiaozhi/v1/"
 DEFAULT_CLIENTS = 20
-DEFAULT_CONCURRENCY = 20
+DEFAULT_ROUNDS = 1  # 默认每个客户端执行1轮测试
 
 # 音频配置
 AUDIO_SAMPLE_RATE = 16000

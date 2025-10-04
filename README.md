@@ -23,6 +23,7 @@ WebSocket 并发测试工具，用于测试 Xiaozhi 服务的性能和稳定性�
 ## ✨ 特性
 
 - 🚀 **高并发测试**：支持高并发 WebSocket 连接
+- 🔄 **多轮测试**：支持每个客户端执行多轮测试，评估持续负载表现
 - 📊 **详细指标**：连接时延、语音识别时延、音频响应时延等全方位指标
 - 📈 **实时监控**：实时显示进度条和测试状态
 - 📉 **可视化报告**：自动生成性能分布图表
@@ -167,7 +168,7 @@ INSERT INTO `xiaozhi`.`sys_device` (`deviceId`, `deviceName`, `roleId`, `type`, 
 ### 基础使用
 
 ```bash
-# 使用默认参数运行测试（100个客户端，20并发）
+# 使用默认参数运行测试（20个并发客户端）
 conda activate test
 python run_test.py
 ```
@@ -175,8 +176,14 @@ python run_test.py
 ### 自定义参数
 
 ```bash
-# 指定服务器地址和客户端数量
-python run_test.py --server ws://192.168.1.100:8091/ws/xiaozhi/v1/ --clients 200 --concurrency 40
+# 指定服务器地址和并发客户端数量
+python run_test.py --server ws://192.168.1.100:8091/ws/xiaozhi/v1/ --clients 200
+
+# 多轮测试（100个客户端，每个执行5轮）
+python run_test.py --clients 100 --rounds 5
+
+# 压力测试（200个客户端，每个执行10轮）
+python run_test.py --clients 200 --rounds 10 --server ws://192.168.1.100:8091/ws/xiaozhi/v1/
 
 # 使用自定义音频文件
 python run_test.py --audio test_audio.wav --clients 50
@@ -196,7 +203,7 @@ python run_test.py --help
 测试运行时会显示：
 - **进度条**：测试完成进度和预计剩余时间
 - **状态统计**：各阶段客户端数量（连接中、Hello、唤醒词、音频发送、音频接收等）
-- **性能指标**：连接成功率、Hello成功率、唤醒词成功率和时延、音频帧率等
+- **性能指标**：连接成功率、Hello成功率、唤醒词成功率和时延、音频帧率、真实对话响应等
 
 ### 日志文件
 
@@ -285,12 +292,12 @@ AUDIO_FRAME_DURATION_MS = 60
 
 ### 1. 压力测试建议
 
-- 逐步增加并发数，观察系统表现
-- 建议从小规模开始：`--clients 10 --concurrency 5`
+- 逐步增加并发数和轮数，观察系统表现
+- 建议从小规模开始：`--clients 10 --rounds 1`
 - 根据服务器性能调整：
-  - 小型测试：`--clients 50 --concurrency 10`
-  - 中型测试：`--clients 100 --concurrency 20`
-  - 大型测试：`--clients 500 --concurrency 50`
+  - 小型测试：`--clients 50 --rounds 3`
+  - 中型测试：`--clients 100 --rounds 5`
+  - 大型测试：`--clients 500 --rounds 10`
 
 ### 2. 调试技巧
 
@@ -333,7 +340,7 @@ sudo apt-get install fonts-wqy-microhei
 ### tester.py - 并发测试器
 
 管理多个客户端的并发测试：
-- 控制并发数量
+- 管理多客户端并发连接
 - 收集汇总指标
 - 生成测试报告
 - 实时显示进度

@@ -1,4 +1,4 @@
 logs/
-xiaozhi_latency_dist_*.png
+figures/
 __pycache__/
 xiaozhi_test.py

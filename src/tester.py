@@ -15,7 +15,7 @@ from .client import XiaozhiTestClient
 from .metrics import TestMetrics
 from .progress import ProgressTracker
 from .logger import logger, log_debug, log_client_flow, debug_logger, client_flow_logger
-from .config import timestamp, LOG_DIR, HAS_MATPLOTLIB
+from .config import timestamp, LOG_DIR, HAS_MATPLOTLIB, FIGURES_DIR
 
 if HAS_MATPLOTLIB:
     import matplotlib.pyplot as plt
@@ -25,9 +25,8 @@ if HAS_MATPLOTLIB:
 class XiaozhiConcurrentTester:
     """Xiaozhi 并发测试器"""
 
-    def __init__(self, server_url: str, concurrency: int, test_audio_path: str = None):
+    def __init__(self, server_url: str, test_audio_path: str = None):
         self.server_url = server_url
-        self.concurrency = concurrency
         self.test_audio_path = test_audio_path
         self.metrics = TestMetrics()
         self.progress = None
@@ -122,9 +121,10 @@ class XiaozhiConcurrentTester:
             ax2.grid(axis='y', alpha=0.2)
             plt.tight_layout()
             filename = f"xiaozhi_summary_{_dt.now().strftime('%Y%m%d_%H%M%S')}.png"
-            plt.savefig(filename, dpi=200, bbox_inches='tight')
-            print(f"📊 结果总览图已保存: {filename}")
-            return filename
+            filepath = os.path.join(FIGURES_DIR, filename)
+            plt.savefig(filepath, dpi=200, bbox_inches='tight')
+            print(f"📊 结果总览图已保存: {filepath}")
+            return filepath
         except Exception as e:
             print(f"生成结果总览图时出错: {e}")
             return None
@@ -145,7 +145,7 @@ class XiaozhiConcurrentTester:
             
             series = self.metrics.get_distribution_series()
             fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-            fig.suptitle(f"Xiaozhi 并发测试（{self.concurrency}）", fontsize=14, fontweight='bold')
+            fig.suptitle(f"Xiaozhi 并发测试", fontsize=14, fontweight='bold')
             palette = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
             cfg = [
                 ('连接时间', series['connection'], axes[0,0], palette[0]),
@@ -197,16 +197,17 @@ class XiaozhiConcurrentTester:
                 ax.yaxis.set_major_locator(MaxNLocator(integer=True))
             plt.tight_layout()
             filename = f"xiaozhi_latency_dist_{_dt.now().strftime('%Y%m%d_%H%M%S')}.png"
-            plt.savefig(filename, dpi=200, bbox_inches='tight')
-            print(f"📈 时延分布图已保存: {filename}")
-            return filename
+            filepath = os.path.join(FIGURES_DIR, filename)
+            plt.savefig(filepath, dpi=200, bbox_inches='tight')
+            print(f"📈 时延分布图已保存: {filepath}")
+            return filepath
         except Exception as e:
             print(f"生成时延分布图时出错: {e}")
             return None
 
-    def start_display_monitoring(self, total_clients: int):
+    def start_display_monitoring(self, total_clients: int, rounds: int = 1):
         """启动实时显示监控"""
-        self.progress = ProgressTracker(total_clients, self.concurrency)
+        self.progress = ProgressTracker(total_clients, rounds)
         self.display_thread = threading.Thread(target=self.display_loop, daemon=True)
         self.display_thread.start()
 
@@ -222,7 +223,7 @@ class XiaozhiConcurrentTester:
             try:
                 # 检查是否所有测试都完成了
                 current_completed = self.progress.completed + self.progress.failed
-                if current_completed >= self.progress.total_clients and current_completed > last_completed:
+                if current_completed >= self.progress.total_tests and current_completed > last_completed:
                     # 所有测试完成，再显示一次最终状态然后退出显示循环
                     self.display_current_status()
                     time.sleep(1)  # 让用户看到最终状态
@@ -231,11 +232,11 @@ class XiaozhiConcurrentTester:
                 last_completed = current_completed
                 self.display_current_status()
                 
-                time.sleep(2)  # 每2秒更新一次
+                time.sleep(0.5)  # 每0.5秒更新一次，提高刷新频率以便看到快速阶段
                 
             except Exception as e:
                 logger.error(f"显示循环错误: {e}")
-                time.sleep(2)
+                time.sleep(0.5)
     
     def display_current_status(self):
         """显示当前状态"""
@@ -284,7 +285,7 @@ class XiaozhiConcurrentTester:
         
         # 检查是否完成
         total_finished = self.progress.completed + self.progress.failed
-        if total_finished >= self.progress.total_clients:
+        if total_finished >= self.progress.total_tests:
             print("✅ 所有测试已完成")
         else:
             print("按 Ctrl+C 停止测试")
@@ -379,12 +380,17 @@ class XiaozhiConcurrentTester:
                     f.write(f"\n===== 设备 {cid} =====\n")
                 f.write(f"{dt_str} - {msg}\n")
 
-    async def run_single_test(self, client_id: int):
-        """运行单个客户端测试"""
+    async def run_single_test(self, client_id: int, rounds: int = 1):
+        """运行单个客户端测试（支持多轮）
+        
+        Args:
+            client_id: 客户端ID
+            rounds: 执行轮数，每轮测试完成后会重置状态并重新开始
+        """
         # 生成固定格式的设备ID: xiaozhi-test-000001 到 xiaozhi-test-999999
         device_id = f"xiaozhi-test-{client_id+1:06d}"
         
-        log_debug(f"准备创建客户端: {device_id}", device_id)
+        log_debug(f"准备创建客户端: {device_id}, 执行轮数: {rounds}", device_id)
 
         client = XiaozhiTestClient(
             self.server_url,
@@ -397,9 +403,24 @@ class XiaozhiConcurrentTester:
         # 使用连接建立/关闭事件跟踪活跃数，这里不再手动+1，避免重复统计
         
         try:
-            log_debug(f"开始运行测试: {device_id}", device_id)
-            await client.run_test()
-            log_debug(f"测试完成: {device_id}", device_id)
+            for round_num in range(1, rounds + 1):
+                if rounds > 1:
+                    log_debug(f"开始第 {round_num}/{rounds} 轮测试: {device_id}", device_id)
+                else:
+                    log_debug(f"开始运行测试: {device_id}", device_id)
+                
+                await client.run_test()
+                
+                if rounds > 1:
+                    log_debug(f"第 {round_num}/{rounds} 轮测试完成: {device_id}", device_id)
+                else:
+                    log_debug(f"测试完成: {device_id}", device_id)
+                
+                # 如果不是最后一轮，重置客户端状态并等待一小段时间
+                if round_num < rounds:
+                    await asyncio.sleep(0.5)  # 轮次之间短暂延迟
+                    client.reset_for_next_round()
+                    
         except Exception as e:
             log_debug(f"测试异常: {device_id} - {e}", device_id)
             logger.error(f"客户端 {device_id} 测试异常: {e}")
@@ -407,14 +428,22 @@ class XiaozhiConcurrentTester:
             # 使用连接关闭事件跟踪活跃数，这里不再手动-1
             pass
 
-    async def run_concurrent_tests(self, num_clients: int):
-        """运行并发测试"""
-        print(f"开始并发测试，客户端数量: {num_clients}, 并发数: {self.concurrency}")
+    async def run_concurrent_tests(self, num_clients: int, rounds: int = 1):
+        """运行并发测试
+        
+        Args:
+            num_clients: 并发客户端数量
+            rounds: 每个客户端执行轮数
+        """
+        if rounds > 1:
+            print(f"开始并发测试，客户端数量: {num_clients}, 每个客户端执行 {rounds} 轮")
+        else:
+            print(f"开始并发测试，客户端数量: {num_clients}")
 
         # 创建所有任务
         all_tasks = []
         for i in range(num_clients):
-            task = asyncio.create_task(self.run_single_test(i))
+            task = asyncio.create_task(self.run_single_test(i, rounds))
             all_tasks.append(task)
         
         # 等待所有任务完成
@@ -423,30 +452,37 @@ class XiaozhiConcurrentTester:
         # 确保显示线程有机会更新最终状态
         await asyncio.sleep(0.5)
 
-    def run_full_test(self, num_clients: int):
-        """运行完整测试"""
+    def run_full_test(self, num_clients: int, rounds: int = 1):
+        """运行完整测试
+        
+        Args:
+            num_clients: 并发客户端数量
+            rounds: 每个客户端执行轮数
+        """
         print("="*100)
         print("Xiaozhi WebSocket 并发测试工具")
         print("="*100)
         print(f"服务器地址: {self.server_url}")
-        print(f"总客户端数: {num_clients}")
-        print(f"并发数量: {self.concurrency}")
+        print(f"并发客户端数: {num_clients}")
+        if rounds > 1:
+            print(f"执行轮数: {rounds} 轮/客户端")
+            print(f"总测试次数: {num_clients * rounds}")
         print(f"测试音频: {self.test_audio_path or '自动生成'}")
         print(f"调试日志: {os.path.join(LOG_DIR, f'xiaozhi_debug_{timestamp}.log')}")
         print(f"客户端流程日志: {os.path.join(LOG_DIR, f'xiaozhi_client_flow_{timestamp}.log')}")
         print("="*100)
         
         # 记录测试开始信息
-        logger.info(f"测试开始 - 服务器: {self.server_url}, 客户端数: {num_clients}, 并发数: {self.concurrency}")
-        debug_logger.debug(f"测试配置 - 服务器地址: {self.server_url}, 总客户端数: {num_clients}, 并发数量: {self.concurrency}")
+        logger.info(f"测试开始 - 服务器: {self.server_url}, 客户端数: {num_clients}, 轮数: {rounds}")
+        debug_logger.debug(f"测试配置 - 服务器地址: {self.server_url}, 并发客户端数: {num_clients}, 执行轮数: {rounds}")
 
         # 启动显示监控
-        self.start_display_monitoring(num_clients)
+        self.start_display_monitoring(num_clients, rounds)
         time.sleep(1)
 
         try:
             # 运行测试
-            asyncio.run(self.run_concurrent_tests(num_clients))
+            asyncio.run(self.run_concurrent_tests(num_clients, rounds))
         except KeyboardInterrupt:
             print("\n\n测试被用户中断")
         finally:
